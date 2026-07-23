@@ -1,62 +1,25 @@
-import { DynamoDBClient, ListTablesCommand } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient } from "@aws-sdk/lib-dynamodb";
-
-const globalForDb = globalThis as unknown as {
-  docClient: DynamoDBDocumentClient | undefined;
-};
-
-function createDocClient() {
-  const client = new DynamoDBClient({
-    endpoint: process.env.DOCUMENT_API_ENDPOINT,
-    region: process.env.DOCUMENT_API_REGION ?? "ru-central1",
-    credentials: {
-      accessKeyId: process.env.AWS_ACCESS_KEY_ID ?? "",
-      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY ?? "",
-    },
-  });
-
-  return DynamoDBDocumentClient.from(client);
-}
-
-export const docClient = globalForDb.docClient ?? createDocClient();
-
-if (process.env.NODE_ENV !== "production") globalForDb.docClient = docClient;
-
-const globalForDbAvailable = globalThis as unknown as {
-  _dbAvailable: boolean | null;
-  _dbAvailablePromise: Promise<boolean> | null;
-};
+const DB_ENDPOINT = process.env.DOCUMENT_API_ENDPOINT || "";
+const DB_REGION = process.env.DOCUMENT_API_REGION || "ru-central1";
 
 export async function isDatabaseAvailable(): Promise<boolean> {
-  if (process.env.USE_DATABASE === "false") {
-    return false;
-  }
-
-  if (globalForDbAvailable._dbAvailable != null) {
-    return globalForDbAvailable._dbAvailable;
-  }
-
-  if (globalForDbAvailable._dbAvailablePromise) {
-    return globalForDbAvailable._dbAvailablePromise;
-  }
-
-  const promise = (async () => {
-    try {
-      await docClient.send(new ListTablesCommand({}));
-      globalForDbAvailable._dbAvailable = true;
-      return true;
-    } catch {
-      console.warn("Database is not available. Running in static mode.");
-      globalForDbAvailable._dbAvailable = false;
-      return false;
-    }
-  })();
-
-  globalForDbAvailable._dbAvailablePromise = promise;
-  return promise;
+  if (process.env.USE_DATABASE === "false") return false;
+  if (!DB_ENDPOINT) return false;
+  return true;
 }
 
-export function resetDbAvailableCache(): void {
-  globalForDbAvailable._dbAvailable = null;
-  globalForDbAvailable._dbAvailablePromise = null;
+export async function ydbRequest(action: string, body: any): Promise<any> {
+  const response = await fetch(DB_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Amz-Target": `DynamoDB_20120810.${action}`,
+      "X-Amz-Date": new Date().toISOString().replace(/[:-]/g, "").split(".")[0] + "Z",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`YDB error: ${text}`);
+  }
+  return response.json();
 }

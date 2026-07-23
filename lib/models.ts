@@ -1,117 +1,11 @@
-import { docClient } from "./db";
-import {
-  GetCommand,
-  PutCommand,
-  DeleteCommand,
-  QueryCommand,
-  ScanCommand,
-  UpdateCommand,
-} from "@aws-sdk/lib-dynamodb";
-import { TableName, IndexName } from "./schema";
+import { ydbRequest } from "./db";
 
-// ---------------------------------------------------------------------------
-// Service (legacy demo)
-// ---------------------------------------------------------------------------
-
-export interface Service {
-  id: string;
-  name: string;
-  description?: string;
-  status: "active" | "inactive" | "deploying";
-  url?: string;
-  createdAt: string;
-  updatedAt: string;
+function uuid() {
+  return crypto.randomUUID();
 }
 
-export async function getServiceById(id: string): Promise<Service | null> {
-  const result = await docClient.send(
-    new GetCommand({
-      TableName: TableName.SERVICES,
-      Key: { id },
-    })
-  );
-  return (result.Item as Service) ?? null;
-}
-
-export async function getServicesByStatus(status: string): Promise<Service[]> {
-  const result = await docClient.send(
-    new QueryCommand({
-      TableName: TableName.SERVICES,
-      IndexName: IndexName.SERVICES_STATUS,
-      KeyConditionExpression: "#status = :status",
-      ExpressionAttributeNames: { "#status": "status" },
-      ExpressionAttributeValues: { ":status": status },
-    })
-  );
-  return (result.Items as Service[]) ?? [];
-}
-
-export async function getAllServices(): Promise<Service[]> {
-  const result = await docClient.send(
-    new ScanCommand({ TableName: TableName.SERVICES })
-  );
-  return (result.Items as Service[]) ?? [];
-}
-
-export async function createService(
-  data: Omit<Service, "createdAt" | "updatedAt">
-): Promise<Service> {
-  const now = new Date().toISOString();
-  const service: Service = { ...data, createdAt: now, updatedAt: now };
-  await docClient.send(
-    new PutCommand({ TableName: TableName.SERVICES, Item: service })
-  );
-  return service;
-}
-
-export async function updateService(
-  id: string,
-  data: Partial<Pick<Service, "name" | "description" | "status" | "url">>
-): Promise<Service> {
-  const updateExpr: string[] = [];
-  const exprValues: Record<string, unknown> = {};
-  const exprNames: Record<string, string> = {};
-
-  if (data.name !== undefined) {
-    updateExpr.push("#name = :name");
-    exprValues[":name"] = data.name;
-    exprNames["#name"] = "name";
-  }
-  if (data.description !== undefined) {
-    updateExpr.push("#description = :description");
-    exprValues[":description"] = data.description;
-    exprNames["#description"] = "description";
-  }
-  if (data.status !== undefined) {
-    updateExpr.push("#status = :status");
-    exprValues[":status"] = data.status;
-    exprNames["#status"] = "status";
-  }
-  if (data.url !== undefined) {
-    updateExpr.push("#url = :url");
-    exprValues[":url"] = data.url;
-    exprNames["#url"] = "url";
-  }
-  updateExpr.push("updatedAt = :updatedAt");
-  exprValues[":updatedAt"] = new Date().toISOString();
-
-  const result = await docClient.send(
-    new UpdateCommand({
-      TableName: TableName.SERVICES,
-      Key: { id },
-      UpdateExpression: `set ${updateExpr.join(", ")}`,
-      ExpressionAttributeValues: exprValues,
-      ExpressionAttributeNames: Object.keys(exprNames).length > 0 ? exprNames : undefined,
-      ReturnValues: "ALL_NEW",
-    })
-  );
-  return result.Attributes as Service;
-}
-
-export async function deleteService(id: string): Promise<void> {
-  await docClient.send(
-    new DeleteCommand({ TableName: TableName.SERVICES, Key: { id } })
-  );
+function now() {
+  return new Date().toISOString();
 }
 
 // ---------------------------------------------------------------------------
@@ -133,106 +27,82 @@ export interface User {
 }
 
 export async function getUserById(id: string): Promise<User | null> {
-  const result = await docClient.send(
-    new GetCommand({ TableName: TableName.USERS, Key: { id } })
-  );
-  return (result.Item as User) ?? null;
+  try {
+    const result = await ydbRequest("GetItem", { TableName: "users", Key: { id: { S: id } } });
+    if (!result.Item) return null;
+    return itemToUser(result.Item);
+  } catch { return null; }
 }
 
 export async function getUserByLogin(login: string): Promise<User | null> {
-  const result = await docClient.send(
-    new QueryCommand({
-      TableName: TableName.USERS,
-      IndexName: IndexName.USERS_LOGIN,
+  try {
+    const result = await ydbRequest("Query", {
+      TableName: "users",
+      IndexName: "login-index",
       KeyConditionExpression: "#login = :login",
       ExpressionAttributeNames: { "#login": "login" },
-      ExpressionAttributeValues: { ":login": login },
-    })
-  );
-  return (result.Items?.[0] as User) ?? null;
+      ExpressionAttributeValues: { ":login": { S: login } },
+    });
+    if (!result.Items || result.Items.length === 0) return null;
+    return itemToUser(result.Items[0]);
+  } catch { return null; }
 }
 
 export async function getAllUsers(): Promise<User[]> {
-  const result = await docClient.send(
-    new ScanCommand({ TableName: TableName.USERS })
-  );
-  return (result.Items as User[]) ?? [];
+  try {
+    const result = await ydbRequest("Scan", { TableName: "users" });
+    return (result.Items || []).map(itemToUser);
+  } catch { return []; }
 }
 
-export async function createUser(
-  data: Omit<User, "createdAt" | "updatedAt">
-): Promise<User> {
-  const now = new Date().toISOString();
-  const user: User = { ...data, createdAt: now, updatedAt: now };
-  await docClient.send(
-    new PutCommand({ TableName: TableName.USERS, Item: user })
-  );
+export async function createUser(data: Omit<User, "createdAt" | "updatedAt">): Promise<User> {
+  const user: User = { ...data, createdAt: now(), updatedAt: now() };
+  await ydbRequest("PutItem", { TableName: "users", Item: userToItem(user) });
   return user;
 }
 
-export async function updateUser(
-  id: string,
-  data: Partial<Pick<User, "nickname" | "server" | "telegram" | "discord" | "supportId" | "role" | "passwordHash">>
-): Promise<User> {
-  const updateExpr: string[] = [];
-  const exprValues: Record<string, unknown> = {};
-  const exprNames: Record<string, string> = {};
-
-  if (data.nickname !== undefined) {
-    updateExpr.push("#nickname = :nickname");
-    exprValues[":nickname"] = data.nickname;
-    exprNames["#nickname"] = "nickname";
-  }
-  if (data.server !== undefined) {
-    updateExpr.push("#server = :server");
-    exprValues[":server"] = data.server;
-    exprNames["#server"] = "server";
-  }
-  if (data.telegram !== undefined) {
-    updateExpr.push("#telegram = :telegram");
-    exprValues[":telegram"] = data.telegram;
-    exprNames["#telegram"] = "telegram";
-  }
-  if (data.discord !== undefined) {
-    updateExpr.push("#discord = :discord");
-    exprValues[":discord"] = data.discord;
-    exprNames["#discord"] = "discord";
-  }
-  if (data.supportId !== undefined) {
-    updateExpr.push("#supportId = :supportId");
-    exprValues[":supportId"] = data.supportId;
-    exprNames["#supportId"] = "supportId";
-  }
-  if (data.role !== undefined) {
-    updateExpr.push("#role = :role");
-    exprValues[":role"] = data.role;
-    exprNames["#role"] = "role";
-  }
-  if (data.passwordHash !== undefined) {
-    updateExpr.push("#passwordHash = :passwordHash");
-    exprValues[":passwordHash"] = data.passwordHash;
-    exprNames["#passwordHash"] = "passwordHash";
-  }
-  updateExpr.push("updatedAt = :updatedAt");
-  exprValues[":updatedAt"] = new Date().toISOString();
-
-  const result = await docClient.send(
-    new UpdateCommand({
-      TableName: TableName.USERS,
-      Key: { id },
-      UpdateExpression: `set ${updateExpr.join(", ")}`,
-      ExpressionAttributeValues: exprValues,
-      ExpressionAttributeNames: Object.keys(exprNames).length > 0 ? exprNames : undefined,
-      ReturnValues: "ALL_NEW",
-    })
-  );
-  return result.Attributes as User;
+export async function updateUser(id: string, data: Partial<Pick<User, "nickname" | "server" | "telegram" | "discord" | "supportId" | "role" | "passwordHash">>): Promise<User> {
+  const user = await getUserById(id);
+  if (!user) throw new Error("User not found");
+  const updated = { ...user, ...data, updatedAt: now() };
+  await ydbRequest("PutItem", { TableName: "users", Item: userToItem(updated) });
+  return updated;
 }
 
 export async function deleteUser(id: string): Promise<void> {
-  await docClient.send(
-    new DeleteCommand({ TableName: TableName.USERS, Key: { id } })
-  );
+  await ydbRequest("DeleteItem", { TableName: "users", Key: { id: { S: id } } });
+}
+
+function itemToUser(item: any): User {
+  return {
+    id: item.id.S,
+    login: item.login.S,
+    passwordHash: item.passwordHash.S,
+    nickname: item.nickname.S,
+    server: item.server.S,
+    telegram: item.telegram?.S || "",
+    discord: item.discord?.S || "",
+    supportId: item.supportId?.S || "",
+    role: item.role.S as "user" | "admin",
+    createdAt: item.createdAt.S,
+    updatedAt: item.updatedAt.S,
+  };
+}
+
+function userToItem(user: User): any {
+  return {
+    id: { S: user.id },
+    login: { S: user.login },
+    passwordHash: { S: user.passwordHash },
+    nickname: { S: user.nickname },
+    server: { S: user.server },
+    telegram: { S: user.telegram },
+    discord: { S: user.discord },
+    supportId: { S: user.supportId },
+    role: { S: user.role },
+    createdAt: { S: user.createdAt },
+    updatedAt: { S: user.updatedAt },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -259,101 +129,77 @@ export interface Voting {
 }
 
 export async function getVotingById(id: string): Promise<Voting | null> {
-  const result = await docClient.send(
-    new GetCommand({ TableName: TableName.VOTINGS, Key: { id } })
-  );
-  return (result.Item as Voting) ?? null;
+  try {
+    const result = await ydbRequest("GetItem", { TableName: "votings", Key: { id: { S: id } } });
+    if (!result.Item) return null;
+    return itemToVoting(result.Item);
+  } catch { return null; }
 }
 
 export async function getVotingsByStatus(status: string): Promise<Voting[]> {
-  const result = await docClient.send(
-    new QueryCommand({
-      TableName: TableName.VOTINGS,
-      IndexName: IndexName.VOTINGS_STATUS,
+  try {
+    const result = await ydbRequest("Query", {
+      TableName: "votings",
+      IndexName: "status-index",
       KeyConditionExpression: "#status = :status",
       ExpressionAttributeNames: { "#status": "status" },
-      ExpressionAttributeValues: { ":status": status },
-    })
-  );
-  return (result.Items as Voting[]) ?? [];
+      ExpressionAttributeValues: { ":status": { S: status } },
+    });
+    return (result.Items || []).map(itemToVoting);
+  } catch { return []; }
 }
 
 export async function getAllVotings(): Promise<Voting[]> {
-  const result = await docClient.send(
-    new ScanCommand({ TableName: TableName.VOTINGS })
-  );
-  return (result.Items as Voting[]) ?? [];
+  try {
+    const result = await ydbRequest("Scan", { TableName: "votings" });
+    return (result.Items || []).map(itemToVoting);
+  } catch { return []; }
 }
 
-export async function createVoting(
-  data: Omit<Voting, "createdAt" | "updatedAt">
-): Promise<Voting> {
-  const now = new Date().toISOString();
-  const voting: Voting = { ...data, createdAt: now, updatedAt: now };
-  await docClient.send(
-    new PutCommand({ TableName: TableName.VOTINGS, Item: voting })
-  );
+export async function createVoting(data: Omit<Voting, "createdAt" | "updatedAt">): Promise<Voting> {
+  const voting: Voting = { ...data, createdAt: now(), updatedAt: now() };
+  await ydbRequest("PutItem", { TableName: "votings", Item: votingToItem(voting) });
   return voting;
 }
 
-export async function updateVoting(
-  id: string,
-  data: Partial<Pick<Voting, "question" | "options" | "status" | "totalVotes" | "imageUrl" | "allowMultiple">>
-): Promise<Voting> {
-  const updateExpr: string[] = [];
-  const exprValues: Record<string, unknown> = {};
-  const exprNames: Record<string, string> = {};
-
-  if (data.question !== undefined) {
-    updateExpr.push("#question = :question");
-    exprValues[":question"] = data.question;
-    exprNames["#question"] = "question";
-  }
-  if (data.options !== undefined) {
-    updateExpr.push("#options = :options");
-    exprValues[":options"] = data.options;
-    exprNames["#options"] = "options";
-  }
-  if (data.status !== undefined) {
-    updateExpr.push("#status = :status");
-    exprValues[":status"] = data.status;
-    exprNames["#status"] = "status";
-  }
-  if (data.totalVotes !== undefined) {
-    updateExpr.push("#totalVotes = :totalVotes");
-    exprValues[":totalVotes"] = data.totalVotes;
-    exprNames["#totalVotes"] = "totalVotes";
-  }
-  if (data.imageUrl !== undefined) {
-    updateExpr.push("#imageUrl = :imageUrl");
-    exprValues[":imageUrl"] = data.imageUrl;
-    exprNames["#imageUrl"] = "imageUrl";
-  }
-  if (data.allowMultiple !== undefined) {
-    updateExpr.push("#allowMultiple = :allowMultiple");
-    exprValues[":allowMultiple"] = data.allowMultiple;
-    exprNames["#allowMultiple"] = "allowMultiple";
-  }
-  updateExpr.push("updatedAt = :updatedAt");
-  exprValues[":updatedAt"] = new Date().toISOString();
-
-  const result = await docClient.send(
-    new UpdateCommand({
-      TableName: TableName.VOTINGS,
-      Key: { id },
-      UpdateExpression: `set ${updateExpr.join(", ")}`,
-      ExpressionAttributeValues: exprValues,
-      ExpressionAttributeNames: Object.keys(exprNames).length > 0 ? exprNames : undefined,
-      ReturnValues: "ALL_NEW",
-    })
-  );
-  return result.Attributes as Voting;
+export async function updateVoting(id: string, data: Partial<Pick<Voting, "question" | "options" | "status" | "totalVotes" | "imageUrl" | "allowMultiple">>): Promise<Voting> {
+  const voting = await getVotingById(id);
+  if (!voting) throw new Error("Voting not found");
+  const updated = { ...voting, ...data, updatedAt: now() };
+  await ydbRequest("PutItem", { TableName: "votings", Item: votingToItem(updated) });
+  return updated;
 }
 
 export async function deleteVoting(id: string): Promise<void> {
-  await docClient.send(
-    new DeleteCommand({ TableName: TableName.VOTINGS, Key: { id } })
-  );
+  await ydbRequest("DeleteItem", { TableName: "votings", Key: { id: { S: id } } });
+}
+
+function itemToVoting(item: any): Voting {
+  return {
+    id: item.id.S,
+    question: item.question.S,
+    options: JSON.parse(item.options.S),
+    status: item.status.S as "active" | "archived",
+    totalVotes: Number(item.totalVotes.N || 0),
+    imageUrl: item.imageUrl?.S || "",
+    allowMultiple: item.allowMultiple?.BOOL || false,
+    createdAt: item.createdAt.S,
+    updatedAt: item.updatedAt.S,
+  };
+}
+
+function votingToItem(voting: Voting): any {
+  return {
+    id: { S: voting.id },
+    question: { S: voting.question },
+    options: { S: JSON.stringify(voting.options) },
+    status: { S: voting.status },
+    totalVotes: { N: String(voting.totalVotes) },
+    imageUrl: { S: voting.imageUrl || "" },
+    allowMultiple: { BOOL: voting.allowMultiple },
+    createdAt: { S: voting.createdAt },
+    updatedAt: { S: voting.updatedAt },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -369,51 +215,65 @@ export interface VoteRecord {
 }
 
 export async function getVoteRecord(votingId: string, userId: string): Promise<VoteRecord | null> {
-  const result = await docClient.send(
-    new GetCommand({ TableName: TableName.VOTE_RECORDS, Key: { votingId, userId } })
-  );
-  return (result.Item as VoteRecord) ?? null;
+  try {
+    const result = await ydbRequest("GetItem", {
+      TableName: "vote-records",
+      Key: { votingId: { S: votingId }, userId: { S: userId } },
+    });
+    if (!result.Item) return null;
+    return itemToVoteRecord(result.Item);
+  } catch { return null; }
 }
 
 export async function getVoteRecordsByVoting(votingId: string): Promise<VoteRecord[]> {
-  const result = await docClient.send(
-    new QueryCommand({
-      TableName: TableName.VOTE_RECORDS,
+  try {
+    const result = await ydbRequest("Query", {
+      TableName: "vote-records",
       KeyConditionExpression: "#votingId = :votingId",
       ExpressionAttributeNames: { "#votingId": "votingId" },
-      ExpressionAttributeValues: { ":votingId": votingId },
-    })
-  );
-  return (result.Items as VoteRecord[]) ?? [];
+      ExpressionAttributeValues: { ":votingId": { S: votingId } },
+    });
+    return (result.Items || []).map(itemToVoteRecord);
+  } catch { return []; }
 }
 
 export async function createVoteRecord(data: Omit<VoteRecord, "createdAt">): Promise<VoteRecord> {
-  const now = new Date().toISOString();
-  const record: VoteRecord = { ...data, createdAt: now };
-  await docClient.send(
-    new PutCommand({ TableName: TableName.VOTE_RECORDS, Item: record })
-  );
+  const record: VoteRecord = { ...data, createdAt: now() };
+  await ydbRequest("PutItem", { TableName: "vote-records", Item: voteRecordToItem(record) });
   return record;
 }
 
 export async function updateVoteRecord(votingId: string, userId: string, data: Pick<VoteRecord, "optionId" | "optionText">): Promise<VoteRecord> {
-  const result = await docClient.send(
-    new UpdateCommand({
-      TableName: TableName.VOTE_RECORDS,
-      Key: { votingId, userId },
-      UpdateExpression: "set #optionId = :optionId, #optionText = :optionText, createdAt = :createdAt",
-      ExpressionAttributeNames: { "#optionId": "optionId", "#optionText": "optionText" },
-      ExpressionAttributeValues: { ":optionId": data.optionId, ":optionText": data.optionText, ":createdAt": new Date().toISOString() },
-      ReturnValues: "ALL_NEW",
-    })
-  );
-  return result.Attributes as VoteRecord;
+  const record: VoteRecord = { votingId, userId, ...data, createdAt: now() };
+  await ydbRequest("PutItem", { TableName: "vote-records", Item: voteRecordToItem(record) });
+  return record;
 }
 
 export async function deleteVoteRecord(votingId: string, userId: string): Promise<void> {
-  await docClient.send(
-    new DeleteCommand({ TableName: TableName.VOTE_RECORDS, Key: { votingId, userId } })
-  );
+  await ydbRequest("DeleteItem", {
+    TableName: "vote-records",
+    Key: { votingId: { S: votingId }, userId: { S: userId } },
+  });
+}
+
+function itemToVoteRecord(item: any): VoteRecord {
+  return {
+    votingId: item.votingId.S,
+    userId: item.userId.S,
+    optionId: item.optionId.S,
+    optionText: item.optionText.S,
+    createdAt: item.createdAt.S,
+  };
+}
+
+function voteRecordToItem(record: VoteRecord): any {
+  return {
+    votingId: { S: record.votingId },
+    userId: { S: record.userId },
+    optionId: { S: record.optionId },
+    optionText: { S: record.optionText },
+    createdAt: { S: record.createdAt },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -431,86 +291,73 @@ export interface Giveaway {
 }
 
 export async function getGiveawayById(id: string): Promise<Giveaway | null> {
-  const result = await docClient.send(
-    new GetCommand({ TableName: TableName.GIVEAWAYS, Key: { id } })
-  );
-  return (result.Item as Giveaway) ?? null;
+  try {
+    const result = await ydbRequest("GetItem", { TableName: "giveaways", Key: { id: { S: id } } });
+    if (!result.Item) return null;
+    return itemToGiveaway(result.Item);
+  } catch { return null; }
 }
 
 export async function getGiveawaysByStatus(status: string): Promise<Giveaway[]> {
-  const result = await docClient.send(
-    new QueryCommand({
-      TableName: TableName.GIVEAWAYS,
-      IndexName: IndexName.GIVEAWAYS_STATUS,
+  try {
+    const result = await ydbRequest("Query", {
+      TableName: "giveaways",
+      IndexName: "status-index",
       KeyConditionExpression: "#status = :status",
       ExpressionAttributeNames: { "#status": "status" },
-      ExpressionAttributeValues: { ":status": status },
-    })
-  );
-  return (result.Items as Giveaway[]) ?? [];
+      ExpressionAttributeValues: { ":status": { S: status } },
+    });
+    return (result.Items || []).map(itemToGiveaway);
+  } catch { return []; }
 }
 
 export async function getAllGiveaways(): Promise<Giveaway[]> {
-  const result = await docClient.send(
-    new ScanCommand({ TableName: TableName.GIVEAWAYS })
-  );
-  return (result.Items as Giveaway[]) ?? [];
+  try {
+    const result = await ydbRequest("Scan", { TableName: "giveaways" });
+    return (result.Items || []).map(itemToGiveaway);
+  } catch { return []; }
 }
 
 export async function createGiveaway(data: Omit<Giveaway, "createdAt" | "updatedAt">): Promise<Giveaway> {
-  const now = new Date().toISOString();
-  const giveaway: Giveaway = { ...data, createdAt: now, updatedAt: now };
-  await docClient.send(
-    new PutCommand({ TableName: TableName.GIVEAWAYS, Item: giveaway })
-  );
+  const giveaway: Giveaway = { ...data, createdAt: now(), updatedAt: now() };
+  await ydbRequest("PutItem", { TableName: "giveaways", Item: giveawayToItem(giveaway) });
   return giveaway;
 }
 
 export async function updateGiveaway(id: string, data: Partial<Pick<Giveaway, "status" | "bannerUrl" | "participants" | "winnerNickname">>): Promise<Giveaway> {
-  const updateExpr: string[] = [];
-  const exprValues: Record<string, unknown> = {};
-  const exprNames: Record<string, string> = {};
-
-  if (data.status !== undefined) {
-    updateExpr.push("#status = :status");
-    exprValues[":status"] = data.status;
-    exprNames["#status"] = "status";
-  }
-  if (data.bannerUrl !== undefined) {
-    updateExpr.push("#bannerUrl = :bannerUrl");
-    exprValues[":bannerUrl"] = data.bannerUrl;
-    exprNames["#bannerUrl"] = "bannerUrl";
-  }
-  if (data.participants !== undefined) {
-    updateExpr.push("#participants = :participants");
-    exprValues[":participants"] = data.participants;
-    exprNames["#participants"] = "participants";
-  }
-  if (data.winnerNickname !== undefined) {
-    updateExpr.push("#winnerNickname = :winnerNickname");
-    exprValues[":winnerNickname"] = data.winnerNickname;
-    exprNames["#winnerNickname"] = "winnerNickname";
-  }
-  updateExpr.push("updatedAt = :updatedAt");
-  exprValues[":updatedAt"] = new Date().toISOString();
-
-  const result = await docClient.send(
-    new UpdateCommand({
-      TableName: TableName.GIVEAWAYS,
-      Key: { id },
-      UpdateExpression: `set ${updateExpr.join(", ")}`,
-      ExpressionAttributeValues: exprValues,
-      ExpressionAttributeNames: Object.keys(exprNames).length > 0 ? exprNames : undefined,
-      ReturnValues: "ALL_NEW",
-    })
-  );
-  return result.Attributes as Giveaway;
+  const giveaway = await getGiveawayById(id);
+  if (!giveaway) throw new Error("Giveaway not found");
+  const updated = { ...giveaway, ...data, updatedAt: now() };
+  await ydbRequest("PutItem", { TableName: "giveaways", Item: giveawayToItem(updated) });
+  return updated;
 }
 
 export async function deleteGiveaway(id: string): Promise<void> {
-  await docClient.send(
-    new DeleteCommand({ TableName: TableName.GIVEAWAYS, Key: { id } })
-  );
+  await ydbRequest("DeleteItem", { TableName: "giveaways", Key: { id: { S: id } } });
+}
+
+function itemToGiveaway(item: any): Giveaway {
+  return {
+    id: item.id.S,
+    status: item.status.S as any,
+    bannerUrl: item.bannerUrl?.S || "",
+    participants: JSON.parse(item.participants?.S || "[]"),
+    winnerNickname: item.winnerNickname?.S || "",
+    createdAt: item.createdAt.S,
+    updatedAt: item.updatedAt.S,
+  };
+}
+
+function giveawayToItem(giveaway: Giveaway): any {
+  return {
+    id: { S: giveaway.id },
+    status: { S: giveaway.status },
+    bannerUrl: { S: giveaway.bannerUrl || "" },
+    participants: { S: JSON.stringify(giveaway.participants) },
+    winnerNickname: { S: giveaway.winnerNickname || "" },
+    createdAt: { S: giveaway.createdAt },
+    updatedAt: { S: giveaway.updatedAt },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -525,33 +372,32 @@ export interface GiveawayWinner {
   wonAt: string;
 }
 
-export async function getGiveawayWinnerById(id: string): Promise<GiveawayWinner | null> {
-  const result = await docClient.send(
-    new GetCommand({ TableName: TableName.GIVEAWAY_WINNERS, Key: { id } })
-  );
-  return (result.Item as GiveawayWinner) ?? null;
-}
-
 export async function getAllGiveawayWinners(): Promise<GiveawayWinner[]> {
-  const result = await docClient.send(
-    new ScanCommand({ TableName: TableName.GIVEAWAY_WINNERS })
-  );
-  return (result.Items as GiveawayWinner[]) ?? [];
+  try {
+    const result = await ydbRequest("Scan", { TableName: "giveaway-winners" });
+    return (result.Items || []).map((i: any) => ({
+      id: i.id.S,
+      giveawayId: i.giveawayId.S,
+      nickname: i.nickname.S,
+      participantsCount: Number(i.participantsCount.N || 0),
+      wonAt: i.wonAt.S,
+    }));
+  } catch { return []; }
 }
 
 export async function createGiveawayWinner(data: Omit<GiveawayWinner, "wonAt">): Promise<GiveawayWinner> {
-  const now = new Date().toISOString();
-  const winner: GiveawayWinner = { ...data, wonAt: now };
-  await docClient.send(
-    new PutCommand({ TableName: TableName.GIVEAWAY_WINNERS, Item: winner })
-  );
+  const winner: GiveawayWinner = { ...data, wonAt: now() };
+  await ydbRequest("PutItem", {
+    TableName: "giveaway-winners",
+    Item: {
+      id: { S: winner.id },
+      giveawayId: { S: winner.giveawayId },
+      nickname: { S: winner.nickname },
+      participantsCount: { N: String(winner.participantsCount) },
+      wonAt: { S: winner.wonAt },
+    },
+  });
   return winner;
-}
-
-export async function deleteGiveawayWinner(id: string): Promise<void> {
-  await docClient.send(
-    new DeleteCommand({ TableName: TableName.GIVEAWAY_WINNERS, Key: { id } })
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -564,45 +410,39 @@ export interface Settings {
   updatedAt: string;
 }
 
-export async function getSettingsByKey(key: string): Promise<Settings | null> {
-  const result = await docClient.send(
-    new GetCommand({ TableName: TableName.SETTINGS, Key: { key } })
-  );
-  return (result.Item as Settings) ?? null;
-}
-
 export async function getAllSettings(): Promise<Settings[]> {
-  const result = await docClient.send(
-    new ScanCommand({ TableName: TableName.SETTINGS })
-  );
-  return (result.Items as Settings[]) ?? [];
-}
-
-export async function createSettings(data: Omit<Settings, "updatedAt">): Promise<Settings> {
-  const now = new Date().toISOString();
-  const settings: Settings = { ...data, updatedAt: now };
-  await docClient.send(
-    new PutCommand({ TableName: TableName.SETTINGS, Item: settings })
-  );
-  return settings;
+  try {
+    const result = await ydbRequest("Scan", { TableName: "settings" });
+    return (result.Items || []).map((i: any) => ({
+      key: i.key.S,
+      value: i.value.S,
+      updatedAt: i.updatedAt.S,
+    }));
+  } catch { return []; }
 }
 
 export async function updateSettings(key: string, value: string): Promise<Settings> {
-  const result = await docClient.send(
-    new UpdateCommand({
-      TableName: TableName.SETTINGS,
-      Key: { key },
-      UpdateExpression: "set #value = :value, updatedAt = :updatedAt",
-      ExpressionAttributeNames: { "#value": "value" },
-      ExpressionAttributeValues: { ":value": value, ":updatedAt": new Date().toISOString() },
-      ReturnValues: "ALL_NEW",
-    })
-  );
-  return result.Attributes as Settings;
+  const settings: Settings = { key, value, updatedAt: now() };
+  await ydbRequest("PutItem", {
+    TableName: "settings",
+    Item: {
+      key: { S: key },
+      value: { S: value },
+      updatedAt: { S: now() },
+    },
+  });
+  return settings;
 }
 
-export async function deleteSettings(key: string): Promise<void> {
-  await docClient.send(
-    new DeleteCommand({ TableName: TableName.SETTINGS, Key: { key } })
-  );
-}
+// заглушки для совместимости
+export async function getServiceById() { return null; }
+export async function getServicesByStatus() { return []; }
+export async function getAllServices() { return []; }
+export async function createService(data: any) { return data; }
+export async function updateService() { return null; }
+export async function deleteService() {}
+export async function getSettingsByKey() { return null; }
+export async function createSettings(data: any) { return data; }
+export async function deleteSettings() {}
+export async function getGiveawayWinnerById() { return null; }
+export async function deleteGiveawayWinner() {}
