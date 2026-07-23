@@ -4,7 +4,7 @@ import { useState } from "react";
 import { X, Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { apiLogin } from "@/lib/api";
+import { checkAdminPassword, setToken } from "@/lib/api";
 import { toast } from "sonner";
 
 interface Props {
@@ -20,8 +20,11 @@ export function StreamerAuthModal({ onAuth, onClose }: Props) {
     e.preventDefault();
     setLoading(true);
     try {
-      const res = await apiLogin("admin", password);
-      localStorage.setItem("jwt-token", res.token);
+      if (!checkAdminPassword(password)) {
+        throw new Error("Неверный пароль");
+      }
+      const token = btoa(JSON.stringify({ userId: "admin", login: "admin", role: "admin", exp: Date.now() + 7 * 24 * 60 * 60 * 1000 }));
+      setToken(token);
       toast.success("Добро пожаловать в панель стримера!");
       onAuth();
     } catch (err: any) {
