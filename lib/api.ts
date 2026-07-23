@@ -2,6 +2,8 @@
 // ============================================================
 
 // --- Token management ---
+const isBrowser = typeof window !== "undefined";
+
 const TOKEN_KEY = "jwt-token";
 
 export function getToken(): string | null {
@@ -34,7 +36,7 @@ export function getTokenPayload(): { userId: string; login: string; role: "user"
 
 // --- LocalStorage helpers ---
 function lsGet<T>(key: string, fallback: T): T {
-  if (typeof window === "undefined") return fallback;
+  if (!isBrowser) return fallback;
   try {
     const data = localStorage.getItem(key);
     return data ? JSON.parse(data) : fallback;
@@ -42,6 +44,7 @@ function lsGet<T>(key: string, fallback: T): T {
 }
 
 function lsSet(key: string, value: any) {
+	if (!isBrowser) return;
   localStorage.setItem(key, JSON.stringify(value));
 }
 
