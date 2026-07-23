@@ -22,6 +22,8 @@ export interface Voting {
   totalVotes: number;
   imageUrl?: string;
   allowMultiple?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface VoteDetail {
