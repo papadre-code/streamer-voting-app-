@@ -16,7 +16,7 @@ export function StreamerSettingsSection() {
 
   useEffect(() => {
     apiGetSettings().then(({ settings }) => {
-      const map = Object.fromEntries(settings.map(s => [s.key, s.value]));
+      const map = Object.fromEntries(settings.map((s: { key: string; value: string }) => [s.key, s.value]);
       if (map.title) setTitle(map.title);
       if (map.description) setDescription(map.description);
       if (map.backgroundImageUrl) setBgImage(map.backgroundImageUrl);
