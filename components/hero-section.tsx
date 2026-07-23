@@ -12,7 +12,7 @@ export function HeroSection() {
     const load = async () => {
       try {
         const { settings } = await apiGetSettings();
-        const map = Object.fromEntries(settings.map(s => [s.key, s.value]));
+        const map = Object.fromEntries(settings.map((s: any) => [s.key, s.value]));
         if (map.title) setTitle(map.title);
         if (map.description) setDescription(map.description);
         if (map.backgroundImageUrl) setBgImage(map.backgroundImageUrl);
