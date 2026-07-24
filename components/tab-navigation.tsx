@@ -51,12 +51,14 @@ export function TabNavigation() {
 
   const tabs = isAdmin ? STREAMER_TABS : USER_TABS;
 
-  const handleAuth = () => {
+    const handleAuth = () => {
     setIsAuthed(true);
     const payload = getTokenPayload();
-    if (payload?.role === "admin") setIsAdmin(true);
+    if (payload?.role === "admin") {
+      setIsAdmin(true);
+      setActiveTab("voting");
+    }
     setShowAuthModal(false);
-    setActiveTab("voting");
   };
 
   const handleExitAdmin = () => {
